@@ -38,6 +38,7 @@ export default function LivePointsTracker({ fantasyTeamId }: LivePointsTrackerPr
   });
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [displayGameweek, setDisplayGameweek] = useState<number>(1);
 
   useEffect(() => {
     if (fantasyTeamId) {
@@ -59,9 +60,22 @@ export default function LivePointsTracker({ fantasyTeamId }: LivePointsTrackerPr
     if (!fantasyTeamId) return;
 
     try {
-      const currentGameweek = gameweekStatus.current?.gameweek_number || 1;
+      // Determine which gameweek to display
+      let targetGameweek = 1;
+      
+      if (gameweekStatus.isGameweekActive && gameweekStatus.current) {
+        // Show current active gameweek
+        targetGameweek = gameweekStatus.current.gameweek_number;
+      } else {
+        // Show latest finalized gameweek
+        const { data: latestFinalized } = await supabase
+          .rpc('get_latest_finalized_gameweek');
+        targetGameweek = latestFinalized || 1;
+      }
 
-      // Fetch roster with current gameweek scores
+      setDisplayGameweek(targetGameweek);
+
+      // Fetch roster with gameweek scores
       const { data: rosterData, error } = await supabase
         .from('rosters')
         .select(`
@@ -73,7 +87,7 @@ export default function LivePointsTracker({ fantasyTeamId }: LivePointsTrackerPr
               name
             )
           ),
-          gameweek_scores!inner (
+          gameweek_scores!left (
             minutes_played,
             goals,
             assists,
@@ -85,12 +99,12 @@ export default function LivePointsTracker({ fantasyTeamId }: LivePointsTrackerPr
           )
         `)
         .eq('fantasy_team_id', fantasyTeamId)
-        .eq('gameweek_scores.gameweek', currentGameweek);
+        .eq('gameweek_scores.gameweek', targetGameweek);
 
       if (error) throw error;
 
       const playersWithPoints: PlayerPoints[] = rosterData?.map(roster => {
-        const score = roster.gameweek_scores[0] || {
+        const score = roster.gameweek_scores?.[0] || {
           minutes_played: 0,
           goals: 0,
           assists: 0,
@@ -104,7 +118,7 @@ export default function LivePointsTracker({ fantasyTeamId }: LivePointsTrackerPr
         let finalPoints = score.total_points;
         
         // Apply captain multiplier
-        if (roster.is_captain) {
+        if (roster.is_captain && finalPoints > 0) {
           finalPoints *= 2;
         }
 
@@ -121,9 +135,9 @@ export default function LivePointsTracker({ fantasyTeamId }: LivePointsTrackerPr
           red_cards: score.red_cards,
           bonus_points: score.bonus_points,
           total_points: finalPoints,
-          is_starter: roster.is_starter,
-          is_captain: roster.is_captain,
-          is_vice_captain: roster.is_vice_captain,
+          is_starter: roster.is_starter || false,
+          is_captain: roster.is_captain || false,
+          is_vice_captain: roster.is_vice_captain || false,
         };
       }) || [];
 
@@ -185,9 +199,12 @@ export default function LivePointsTracker({ fantasyTeamId }: LivePointsTrackerPr
       <div className="bg-gradient-to-r from-emerald-500 to-blue-600 rounded-xl shadow-lg p-6 text-white">
         <div className="flex justify-between items-start mb-4">
           <div>
-            <h2 className="text-2xl font-bold">Live Points</h2>
+            <h2 className="text-2xl font-bold">
+              {gameweekStatus.isGameweekActive ? 'Live Points' : 'Latest Points'}
+            </h2>
             <p className="text-emerald-100">
-              {gameweekStatus.current?.name || 'Current Gameweek'}
+              Gameweek {displayGameweek}
+              {gameweekStatus.isGameweekActive ? ' (Live)' : ' (Final)'}
             </p>
           </div>
           <button
@@ -280,6 +297,7 @@ export default function LivePointsTracker({ fantasyTeamId }: LivePointsTrackerPr
                   {player.minutes_played}' | G:{player.goals} A:{player.assists}
                   {player.yellow_cards > 0 && ` YC:${player.yellow_cards}`}
                   {player.red_cards > 0 && ` RC:${player.red_cards}`}
+                  {player.bonus_points > 0 && ` B:${player.bonus_points}`}
                 </div>
               </div>
             </div>
@@ -307,6 +325,7 @@ export default function LivePointsTracker({ fantasyTeamId }: LivePointsTrackerPr
                 <div className="font-bold text-gray-600">{player.total_points}</div>
                 <div className="text-xs text-gray-500">
                   {player.minutes_played}' | G:{player.goals} A:{player.assists}
+                  {player.bonus_points > 0 && ` B:${player.bonus_points}`}
                 </div>
               </div>
             </div>
@@ -320,6 +339,17 @@ export default function LivePointsTracker({ fantasyTeamId }: LivePointsTrackerPr
             <Clock className="h-4 w-4" />
             <span className="text-sm font-medium">
               Points are updating live during the gameweek. Refresh to see the latest scores.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {!gameweekStatus.isGameweekActive && (
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+          <div className="flex items-center space-x-2 text-gray-600">
+            <Target className="h-4 w-4" />
+            <span className="text-sm">
+              Showing points from Gameweek {displayGameweek} (latest finalized gameweek).
             </span>
           </div>
         </div>

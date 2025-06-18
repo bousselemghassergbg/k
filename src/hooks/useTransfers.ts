@@ -42,10 +42,25 @@ export function useTransfers(fantasyTeamId?: string) {
       if (error) throw error;
 
       // Check if transfers are allowed
-      const { data: transfersAllowed, error: transferError } = await supabase
-        .rpc('transfers_allowed');
+      let transfersAllowed = false;
+      try {
+        const { data: transfersAllowedData, error: transferError } = await supabase
+          .rpc('transfers_allowed');
 
-      if (transferError) throw transferError;
+        if (!transferError) {
+          transfersAllowed = transfersAllowedData || false;
+        }
+      } catch (error) {
+        console.warn('Transfers allowed function not available:', error);
+        // Default logic: check if there's no active gameweek
+        const { data: activeGameweek } = await supabase
+          .from('gameweeks')
+          .select('gameweek_number')
+          .eq('status', 'active')
+          .single();
+        
+        transfersAllowed = !activeGameweek;
+      }
 
       const transfersMadeThisGW = team.transfers_made_this_gw || 0;
       const transfersBanked = team.transfers_banked || 0;
@@ -94,7 +109,7 @@ export function useTransfers(fantasyTeamId?: string) {
       // Get player prices
       const { data: players, error: playersError } = await supabase
         .from('players')
-        .select('player_id, price')
+        .select('player_id, price, name')
         .in('player_id', [outgoingPlayerId, incomingPlayerId]);
 
       if (playersError) throw playersError;

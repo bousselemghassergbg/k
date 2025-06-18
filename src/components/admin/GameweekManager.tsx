@@ -221,33 +221,12 @@ export default function GameweekManager() {
 
     setProcessing(true);
     try {
-      // First calculate all team points
-      await calculateAllTeamPoints(gameweek);
-      
-      // Then finalize the gameweek
-      const { error } = await supabase
-        .from('gameweeks')
-        .update({ 
-          status: 'finalized',
-          is_finished: true,
-          is_current: false
-        })
-        .eq('gameweek_number', gameweek);
+      // Use the database function to finalize the gameweek
+      const { error } = await supabase.rpc('finalize_gameweek', {
+        p_gameweek: gameweek
+      });
 
       if (error) throw error;
-
-      // Set next gameweek as current if it exists
-      const nextGameweek = gameweeks.find(gw => gw.gameweek_number === gameweek + 1);
-      if (nextGameweek) {
-        await supabase
-          .from('gameweeks')
-          .update({ 
-            is_current: true,
-            is_next: false,
-            status: 'active'
-          })
-          .eq('gameweek_number', gameweek + 1);
-      }
       
       toast.success(`Gameweek ${gameweek} finalized successfully!`);
       await fetchGameweeks();
@@ -271,10 +250,16 @@ export default function GameweekManager() {
 
       let calculatedCount = 0;
       
-      // Calculate points for each team
+      // Calculate points for each team using the database function
       for (const team of teams || []) {
         try {
-          const teamPoints = await calculateTeamPointsManual(team.fantasy_team_id, gameweek);
+          const { data: teamPoints, error: pointsError } = await supabase
+            .rpc('calculate_fantasy_team_points', {
+              p_fantasy_team_id: team.fantasy_team_id,
+              p_gameweek: gameweek
+            });
+
+          if (pointsError) throw pointsError;
           
           // Insert or update gameweek points
           const { error: insertError } = await supabase
@@ -305,77 +290,6 @@ export default function GameweekManager() {
       }
       throw error;
     }
-  };
-
-  const calculateTeamPointsManual = async (fantasyTeamId: string, gameweek: number) => {
-    // Get team roster with player scores
-    const { data: roster, error } = await supabase
-      .from('rosters')
-      .select(`
-        *,
-        players:player_id (
-          position
-        )
-      `)
-      .eq('fantasy_team_id', fantasyTeamId);
-
-    if (error) throw error;
-
-    let totalPoints = 0;
-    let captainPoints = 0;
-
-    for (const rosterPlayer of roster || []) {
-      if (!rosterPlayer.is_starter) continue;
-
-      // Get player's gameweek score
-      const { data: scores } = await supabase
-        .from('gameweek_scores')
-        .select('total_points, minutes_played')
-        .eq('player_id', rosterPlayer.player_id)
-        .eq('gameweek', gameweek)
-        .single();
-
-      const playerPoints = scores?.total_points || 0;
-      const minutesPlayed = scores?.minutes_played || 0;
-
-      // If player didn't play, try to substitute
-      if (minutesPlayed === 0) {
-        // Find substitute from bench with same position
-        const substitute = roster.find(r => 
-          !r.is_starter && 
-          r.players?.position === rosterPlayer.players?.position
-        );
-
-        if (substitute) {
-          const { data: subScores } = await supabase
-            .from('gameweek_scores')
-            .select('total_points, minutes_played')
-            .eq('player_id', substitute.player_id)
-            .eq('gameweek', gameweek)
-            .single();
-
-          const subPoints = subScores?.total_points || 0;
-          const subMinutes = subScores?.minutes_played || 0;
-
-          if (subMinutes > 0) {
-            totalPoints += subPoints;
-            if (rosterPlayer.is_captain) {
-              captainPoints = subPoints;
-            }
-          }
-        }
-      } else {
-        totalPoints += playerPoints;
-        if (rosterPlayer.is_captain) {
-          captainPoints = playerPoints;
-        }
-      }
-    }
-
-    // Apply captain multiplier
-    totalPoints += captainPoints;
-
-    return totalPoints;
   };
 
   const getStatusColor = (status: string) => {
@@ -597,6 +511,17 @@ export default function GameweekManager() {
                     >
                       <CheckCircle className="h-4 w-4 mr-2" />
                       Finalize Gameweek
+                    </button>
+                  )}
+
+                  {selectedGW.status === 'active' && (
+                    <button
+                      onClick={() => calculateAllTeamPoints(selectedGW.gameweek_number)}
+                      disabled={processing}
+                      className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center"
+                    >
+                      <Database className="h-4 w-4 mr-2" />
+                      Calculate Points
                     </button>
                   )}
 
